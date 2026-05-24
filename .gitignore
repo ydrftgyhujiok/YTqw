@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+venv/
+env/
+.eggs/
+*.egg-info/
+*.egg
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Output & cache
+/output/
+/work/
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
+
+# User config
+.ai_clip_gen/
