@@ -1,0 +1,86 @@
+# Настройки по умолчанию AI Short Video Clip Generator
+# Можно править вручную или через GUI -> Настройки
+
+paths:
+  # Куда складываются финальные клипы
+  output_dir: ./output
+  # Куда складывается скачанное/промежуточное
+  work_dir: ./work
+  # Путь к ffmpeg (если не в PATH)
+  ffmpeg: ffmpeg
+  ffprobe: ffprobe
+
+whisper:
+  # tiny / base / small / medium / large-v2 / large-v3
+  model: large-v3
+  # cuda / cpu / auto
+  device: auto
+  # float16 (быстро, GPU), int8 (CPU), float32
+  compute_type: float16
+  # Размер batch для batched inference (для 12 GB VRAM безопасно 16, можно 24)
+  batch_size: 16
+  # Язык (auto = автодетект)
+  language: auto
+  # Если true — пропускаем word-level alignment (×2 быстрее, но субтитры будут
+  # на уровне сегментов, без подсветки текущего слова)
+  skip_alignment: false
+
+ollama:
+  host: http://localhost:11434
+  model: llama3.1:8b
+  # Температура — низкая для стабильных результатов
+  temperature: 0.4
+  # Максимум токенов в ответе
+  num_predict: 4096
+  # Контекст модели (расширяем для длинных транскриптов)
+  num_ctx: 16384
+
+analysis:
+  # Сколько секунд один блок транскрипта (для chunking больших видео)
+  chunk_seconds: 600
+  # Минимальная и максимальная длина клипа
+  min_clip_seconds: 20
+  max_clip_seconds: 75
+  # Сколько клипов брать максимум на одно видео
+  max_clips_per_video: 12
+  # Минимальный score (0-10), который LLM присвоил моменту
+  min_score: 6.5
+
+video:
+  # Финальное разрешение
+  width: 1080
+  height: 1920
+  fps: 30
+  # NVENC (h264_nvenc / hevc_nvenc) или libx264
+  encoder: h264_nvenc
+  # NVENC preset
+  nvenc_preset: p5
+  # Качество (CQ для NVENC)
+  cq: 21
+  # Битрейт максимальный
+  max_bitrate: 12M
+  # Стратегия 9:16 кадрирования: center_blur / center_crop
+  reframe_mode: center_blur
+  # Сила размытия фона (для center_blur)
+  blur_strength: 25
+
+subtitles:
+  # word_by_word (как CapCut/Opus Clip) или phrase (классика)
+  style: word_by_word
+  font: Arial
+  font_size: 18
+  primary_color: "&H00FFFFFF"      # белый
+  highlight_color: "&H0000FFFF"    # жёлтый (выделение текущего слова)
+  outline_color: "&H00000000"      # чёрная обводка
+  outline_thickness: 3
+  shadow: 1
+  bottom_margin: 360               # отступ снизу в пикселях
+  max_chars_per_line: 22
+  uppercase: false
+
+processing:
+  # Сколько клипов одновременно рендерить (NVENC ограничен ~3 сессиями
+  # на consumer-картах, у RTX 4070 Ti обычно 5+)
+  parallel_clips: 3
+  # Сколько видео обрабатывать параллельно (обычно 1, т.к. WhisperX занимает GPU)
+  parallel_videos: 1
