@@ -17,7 +17,7 @@ from PyQt6.QtWidgets import (
 
 from ..app_config import load_config, save_config
 from ..core.pipeline import VideoJob, VideoResult
-from ..core.hardware import detect_hardware
+from ..core.hardware import detect_hardware, cuda_misconfigured
 from .settings_dialog import SettingsDialog
 from .workers import PipelineWorker
 
@@ -47,6 +47,20 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(central)
 
         root = QVBoxLayout(central)
+
+        # Плашка-предупреждение о CUDA (показывается только если проблема)
+        self.cuda_warning = QLabel("")
+        self.cuda_warning.setWordWrap(True)
+        self.cuda_warning.setStyleSheet(
+            "QLabel { background: #5a1a1a; color: #ffe; "
+            "padding: 10px; border: 2px solid #a33; border-radius: 4px; "
+            "font-family: 'Consolas','Courier New',monospace; }"
+        )
+        self.cuda_warning.setVisible(False)
+        self.cuda_warning.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse
+        )
+        root.addWidget(self.cuda_warning)
 
         # Верхняя панель — добавление источников
         add_row = QHBoxLayout()
@@ -257,10 +271,32 @@ class MainWindow(QMainWindow):
         nvenc = "✓" if hw.nvenc_available else "✗"
         msg = (
             f"GPU CUDA: {gpu} | NVENC: {nvenc} ({', '.join(hw.nvenc_encoders) or 'нет'}) | "
-            f"CPU threads: {hw.cpu_threads}"
+            f"CPU threads: {hw.cpu_threads} | "
+            f"torch {hw.torch_version} cuda={hw.torch_cuda_version or '—'}"
         )
         self.statusBar().showMessage(msg)
         self._log(msg)
+
+        if cuda_misconfigured(hw):
+            # Большая красная плашка — это самая частая ошибка установки
+            self.cuda_warning.setText(
+                f"⚠ В системе есть NVIDIA {hw.gpu_name} (драйвер {hw.nvidia_driver}), "
+                f"но PyTorch установлен БЕЗ CUDA — транскрипция пойдёт на CPU и будет "
+                f"в 20–50 раз медленнее.\n"
+                f"Исправь так:\n"
+                f"    pip uninstall -y torch torchaudio torchvision\n"
+                f"    pip install torch torchaudio --index-url "
+                f"https://download.pytorch.org/whl/cu121"
+            )
+            self.cuda_warning.setVisible(True)
+            QMessageBox.warning(
+                self, "PyTorch без CUDA",
+                "У тебя установлен PyTorch без поддержки CUDA. "
+                "Транскрипция пойдёт на CPU и будет очень медленной.\n\n"
+                "Подробности и команда для исправления — в красной плашке в окне."
+            )
+        else:
+            self.cuda_warning.setVisible(False)
 
     def _log(self, msg: str) -> None:
         self.log.append(msg)

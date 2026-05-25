@@ -17,10 +17,13 @@ whisper:
   device: auto
   # float16 (быстро, GPU), int8 (CPU), float32
   compute_type: float16
-  # Размер batch для batched inference (для 12 GB VRAM безопасно 16)
+  # Размер batch для batched inference (для 12 GB VRAM безопасно 16, можно 24)
   batch_size: 16
   # Язык (auto = автодетект)
   language: auto
+  # Если true — пропускаем word-level alignment (×2 быстрее, но субтитры будут
+  # на уровне сегментов, без подсветки текущего слова)
+  skip_alignment: false
 
 ollama:
   host: http://localhost:11434

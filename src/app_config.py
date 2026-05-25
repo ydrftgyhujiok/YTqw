@@ -28,6 +28,9 @@ class WhisperConfig:
     compute_type: str = "float16"
     batch_size: int = 16
     language: str = "auto"
+    # Если True — пропускаем word-level alignment (вдвое быстрее, но субтитры
+    # будут на уровне сегментов, без подсветки текущего слова)
+    skip_alignment: bool = False
 
 
 @dataclass

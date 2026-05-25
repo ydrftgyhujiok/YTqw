@@ -39,15 +39,45 @@ WhisperX (распознавание речи), FFmpeg (NVENC) и PyQt6 (GUI).
 ollama pull llama3.1:8b
 ollama pull qwen2.5:14b
 
-# 4. PyTorch с CUDA 12.1 (обязательно для GPU-ускорения WhisperX):
+# 4. PyTorch с CUDA 12.1 (ОБЯЗАТЕЛЬНО для GPU-ускорения WhisperX):
 pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
 
 # 5. Остальные зависимости
 pip install -r requirements.txt
 
-# 6. Запусти GUI
+# 6. Проверь что всё настроено правильно (особенно CUDA!)
+python tools/check_cuda.py
+
+# 7. Запусти GUI
 python main.py
 ```
+
+## ⚠ Если транскрипция идёт МЕДЛЕННО (GPU не используется)
+
+Самая частая проблема — **PyTorch установлен в CPU-only сборке**. Симптомы:
+- Процессор загружен на 100%, видеокарта простаивает
+- 10-минутное видео транскрибируется час и больше
+
+Запусти `python tools/check_cuda.py` — он покажет точную причину и команду для починки.
+Скорее всего тебе нужно:
+
+```bash
+pip uninstall -y torch torchaudio torchvision
+pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu121
+```
+
+На правильно настроенной RTX 4070 Ti с `large-v3` транскрипция должна идти
+**×15–30 быстрее реального времени** (час видео — ~2–4 минуты).
+В логе ты увидишь строку вида `Транскрипция: 120.3с (×15.2 от реального времени)`.
+
+### Способы дополнительно ускорить транскрипцию
+
+1. **Понизь модель** в настройках: `medium` ≈ в 2 раза быстрее `large-v3`,
+   `small` — ещё в 2 раза, точность отличная для речи на основных языках.
+2. **Включи `skip_alignment`** в настройках Whisper — пропустит word-level
+   alignment (×2 быстрее), но субтитры будут на уровне фраз, не word-by-word.
+3. **Увеличь `batch_size`** до 24-32 (на RTX 4070 Ti 12 ГБ это безопасно для
+   `medium`, для `large-v3` лучше 16).
 
 ## Архитектура
 

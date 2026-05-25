@@ -76,11 +76,16 @@ class SettingsDialog(QDialog):
         self.whisper_batch = QSpinBox()
         self.whisper_batch.setRange(1, 64)
         self.whisper_lang = QLineEdit()
+        self.whisper_skip_align = QCheckBox(
+            "Пропустить word-level alignment (×2 быстрее, "
+            "субтитры не будут word-by-word)"
+        )
         wf.addRow("Модель Whisper", self.whisper_model)
         wf.addRow("Устройство", self.whisper_device)
         wf.addRow("Compute type", self.whisper_compute)
         wf.addRow("Batch size", self.whisper_batch)
         wf.addRow("Язык (auto = автодетект)", self.whisper_lang)
+        wf.addRow("", self.whisper_skip_align)
         tabs.addTab(wt, "Whisper")
 
         # --- Ollama ---
@@ -215,6 +220,7 @@ class SettingsDialog(QDialog):
         self.whisper_compute.setCurrentText(c.whisper.compute_type)
         self.whisper_batch.setValue(c.whisper.batch_size)
         self.whisper_lang.setText(c.whisper.language)
+        self.whisper_skip_align.setChecked(c.whisper.skip_alignment)
 
         self.ollama_host.setText(c.ollama.host)
         self.ollama_model.setCurrentText(c.ollama.model)
@@ -265,6 +271,7 @@ class SettingsDialog(QDialog):
         c.whisper.compute_type = self.whisper_compute.currentText()
         c.whisper.batch_size = self.whisper_batch.value()
         c.whisper.language = self.whisper_lang.text().strip() or "auto"
+        c.whisper.skip_alignment = self.whisper_skip_align.isChecked()
 
         c.ollama.host = self.ollama_host.text().strip() or "http://localhost:11434"
         c.ollama.model = self.ollama_model.currentText().strip() or "llama3.1:8b"
