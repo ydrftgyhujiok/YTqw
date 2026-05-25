@@ -5,6 +5,7 @@ from __future__ import annotations
 from PyQt6.QtCore import QThread, pyqtSignal
 
 from ..app_config import AppConfig
+from ..profile import Profile
 from ..core.pipeline import VideoJob, VideoResult, process_batch
 
 
@@ -19,15 +20,16 @@ class PipelineWorker(QThread):
     all_finished = pyqtSignal(object)
     error = pyqtSignal(str)
 
-    def __init__(self, jobs: list[VideoJob], cfg: AppConfig, parent=None) -> None:
+    def __init__(self, jobs: list[VideoJob], cfg: AppConfig, profile: Profile, parent=None) -> None:
         super().__init__(parent)
         self.jobs = jobs
         self.cfg = cfg
+        self.profile = profile
 
     def run(self) -> None:
         try:
             results = process_batch(
-                self.jobs, self.cfg,
+                self.jobs, self.cfg, self.profile,
                 on_video=lambda i, j: self.video_started.emit(i, j),
                 on_stage=lambda s, p, m: self.stage_update.emit(s, p, m),
                 on_video_done=lambda r: self.video_finished.emit(r),

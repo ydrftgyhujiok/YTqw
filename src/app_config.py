@@ -62,6 +62,13 @@ class VideoConfig:
     max_bitrate: str = "12M"
     reframe_mode: str = "center_blur"
     blur_strength: int = 25
+    # Масштаб переднего слоя в % от ширины холста.
+    # 100 = вписано по ширине, 220 = в 2.2 раза крупнее (с центральным кропом).
+    # Полезно для геймплея/реакций когда лицо/действие маленькое в кадре.
+    foreground_scale: int = 100
+    # Вертикальный сдвиг переднего слоя в % от высоты холста.
+    # 0 = по центру, отрицательное = выше, положительное = ниже.
+    foreground_offset_y: int = 0
 
 
 @dataclass
@@ -94,6 +101,9 @@ class AppConfig:
     video: VideoConfig = field(default_factory=VideoConfig)
     subtitles: SubtitlesConfig = field(default_factory=SubtitlesConfig)
     processing: ProcessingConfig = field(default_factory=ProcessingConfig)
+    # Имя активного профиля (см. src/profile.py). Все per-канал настройки
+    # (video/subtitles/analysis/source_dir/output_dir) берутся из профиля.
+    active_profile: str = "Default"
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -113,6 +123,7 @@ class AppConfig:
             video=merge(VideoConfig, data.get("video")),
             subtitles=merge(SubtitlesConfig, data.get("subtitles")),
             processing=merge(ProcessingConfig, data.get("processing")),
+            active_profile=str(data.get("active_profile", "Default")),
         )
 
 

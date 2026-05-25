@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Callable, Optional
 
 from ..app_config import AppConfig
+from ..profile import Profile
 from . import downloader, transcriber, analyzer, subtitler, clipper
 from .analyzer import Moment
 from .hardware import HardwareProfile, detect_hardware
@@ -54,12 +55,19 @@ def _emit(cb: StageCb, stage: str, progress: float, message: str) -> None:
 def process_video(
     job: VideoJob,
     cfg: AppConfig,
+    profile: Profile,
     hw: HardwareProfile,
     on_stage: StageCb = None,
 ) -> VideoResult:
-    """Обрабатываем одно видео: скачивание -> транскрипт -> анализ -> рендер всех клипов."""
+    """Обрабатываем одно видео: скачивание -> транскрипт -> анализ -> рендер всех клипов.
+
+    Все per-канал параметры (видео, субтитры, длительность клипов, output_dir)
+    берутся из `profile`. Глобальные (Whisper, Ollama, пути ffmpeg, processing)
+    из `cfg`."""
     work = Path(cfg.paths.work_dir).expanduser().resolve()
-    out_root = Path(cfg.paths.output_dir).expanduser().resolve()
+    # output_dir теперь из профиля; fallback на глобальный
+    out_root_str = profile.output_dir or cfg.paths.output_dir
+    out_root = Path(out_root_str).expanduser().resolve()
     work.mkdir(parents=True, exist_ok=True)
     out_root.mkdir(parents=True, exist_ok=True)
 
@@ -91,10 +99,10 @@ def process_video(
             ],
         })
 
-        # 3. Анализ моментов
+        # 3. Анализ моментов (длительность/score из профиля)
         _emit(on_stage, "analyze", 0.0, "LLM ищет high-engagement моменты")
         moments = analyzer.analyze_transcript(
-            transcript, cfg.analysis, cfg.ollama,
+            transcript, profile.analysis, cfg.ollama,
             on_progress=lambda p, m: _emit(on_stage, "analyze", p, m),
         )
 
@@ -122,7 +130,7 @@ def process_video(
             out_path = video_out / f"{i+1:02d}_{safe_title}.mp4"
             subs_path = video_out / f"{i+1:02d}_{safe_title}.ass"
             subtitler.write_subtitles(
-                subs_path, transcript.segments, cfg.subtitles, cfg.video,
+                subs_path, transcript.segments, profile.subtitles, profile.video,
                 clip_offset=start, clip_duration=duration,
             )
             clip_jobs.append(clipper.ClipJob(
@@ -144,7 +152,7 @@ def process_video(
         with ThreadPoolExecutor(max_workers=max(1, cfg.processing.parallel_clips)) as ex:
             futures = {
                 ex.submit(
-                    clipper.render_clip, cj, cfg.video, cfg.subtitles, cfg.paths, hw, None,
+                    clipper.render_clip, cj, profile.video, profile.subtitles, cfg.paths, hw, None,
                 ): (cj, m)
                 for cj, m in zip(clip_jobs, moments)
             }
@@ -172,18 +180,19 @@ def process_video(
 def process_batch(
     jobs: list[VideoJob],
     cfg: AppConfig,
+    profile: Profile,
     on_video: Callable[[int, VideoJob], None] | None = None,
     on_stage: StageCb = None,
     on_video_done: Callable[[VideoResult], None] | None = None,
 ) -> list[VideoResult]:
-    """Обрабатываем batch видео. WhisperX занимает GPU — обычно parallel_videos=1."""
+    """Обрабатываем batch видео под активным профилем."""
     hw = detect_hardware(cfg.paths.ffmpeg)
     results: list[VideoResult] = []
     for i, job in enumerate(jobs):
         if on_video:
             on_video(i, job)
         t0 = time.time()
-        res = process_video(job, cfg, hw, on_stage=on_stage)
+        res = process_video(job, cfg, profile, hw, on_stage=on_stage)
         res_elapsed = time.time() - t0
         if on_video_done:
             on_video_done(res)

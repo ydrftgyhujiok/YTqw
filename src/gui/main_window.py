@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+from datetime import datetime
 from pathlib import Path
 
 from PyQt6.QtCore import Qt, QUrl
@@ -12,12 +13,17 @@ from PyQt6.QtGui import QAction, QDesktopServices, QDragEnterEvent, QDropEvent
 from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QListWidget, QListWidgetItem,
     QPushButton, QLabel, QFileDialog, QProgressBar, QTextEdit, QLineEdit,
-    QMessageBox, QSplitter, QStatusBar, QInputDialog,
+    QMessageBox, QSplitter, QStatusBar, QInputDialog, QComboBox,
 )
 
 from ..app_config import load_config, save_config
 from ..core.pipeline import VideoJob, VideoResult
 from ..core.hardware import detect_hardware, cuda_misconfigured
+from ..profile import (
+    Profile, list_profiles, load_profile, save_profile,
+    delete_profile, rename_profile, duplicate_profile,
+)
+from .profile_dialog import ProfileEditDialog
 from .settings_dialog import SettingsDialog
 from .workers import PipelineWorker
 
@@ -36,9 +42,22 @@ class MainWindow(QMainWindow):
         self.worker: PipelineWorker | None = None
         self.results: list[VideoResult] = []
 
+        # Загружаем список профилей; если ничего нет — создаётся Default
+        self.profiles: list[Profile] = list_profiles()
+        self.active_profile: Profile = self._resolve_active_profile()
+
         self._build_ui()
         self._build_menu()
+        self._refresh_profile_combo()
         self._show_hardware_info()
+
+    def _resolve_active_profile(self) -> Profile:
+        target = (self.cfg.active_profile or "").strip()
+        if target:
+            for p in self.profiles:
+                if p.name == target or p.slug == target:
+                    return p
+        return self.profiles[0]
 
     # ---------- UI ----------
 
@@ -61,6 +80,47 @@ class MainWindow(QMainWindow):
             Qt.TextInteractionFlag.TextSelectableByMouse
         )
         root.addWidget(self.cuda_warning)
+
+        # Панель профиля канала
+        prof_row = QHBoxLayout()
+        prof_row.addWidget(QLabel("Профиль канала:"))
+        self.profile_combo = QComboBox()
+        self.profile_combo.setMinimumWidth(220)
+        self.profile_combo.currentIndexChanged.connect(self._on_profile_changed)
+        prof_row.addWidget(self.profile_combo, 1)
+
+        new_prof_btn = QPushButton("+")
+        new_prof_btn.setFixedWidth(28)
+        new_prof_btn.setToolTip("Новый профиль")
+        new_prof_btn.clicked.connect(self._new_profile)
+        prof_row.addWidget(new_prof_btn)
+
+        edit_prof_btn = QPushButton("✎")
+        edit_prof_btn.setFixedWidth(28)
+        edit_prof_btn.setToolTip("Редактировать профиль")
+        edit_prof_btn.clicked.connect(self._edit_profile)
+        prof_row.addWidget(edit_prof_btn)
+
+        dup_prof_btn = QPushButton("⧉")
+        dup_prof_btn.setFixedWidth(28)
+        dup_prof_btn.setToolTip("Дублировать профиль")
+        dup_prof_btn.clicked.connect(self._duplicate_profile)
+        prof_row.addWidget(dup_prof_btn)
+
+        del_prof_btn = QPushButton("🗑")
+        del_prof_btn.setFixedWidth(28)
+        del_prof_btn.setToolTip("Удалить профиль")
+        del_prof_btn.clicked.connect(self._delete_profile)
+        prof_row.addWidget(del_prof_btn)
+
+        load_src_btn = QPushButton("⇣ Загрузить из папки канала")
+        load_src_btn.setToolTip(
+            "Добавить в очередь все видео из source_dir текущего профиля"
+        )
+        load_src_btn.clicked.connect(self._load_from_profile_source)
+        prof_row.addWidget(load_src_btn)
+
+        root.addLayout(prof_row)
 
         # Верхняя панель — добавление источников
         add_row = QHBoxLayout()
@@ -186,6 +246,15 @@ class MainWindow(QMainWindow):
         file_menu.addAction(quit_act)
 
         tools = menubar.addMenu("&Инструменты")
+        edit_prof = QAction("Редактировать профиль…", self)
+        edit_prof.triggered.connect(self._edit_profile)
+        tools.addAction(edit_prof)
+
+        new_prof = QAction("Новый профиль…", self)
+        new_prof.triggered.connect(self._new_profile)
+        tools.addAction(new_prof)
+
+        tools.addSeparator()
         settings = QAction("Настройки…", self)
         settings.triggered.connect(self._open_settings)
         tools.addAction(settings)
@@ -299,7 +368,139 @@ class MainWindow(QMainWindow):
             self.cuda_warning.setVisible(False)
 
     def _log(self, msg: str) -> None:
-        self.log.append(msg)
+        ts = datetime.now().strftime("%H:%M:%S")
+        # Для многострочных сообщений ставим префикс только перед первой строкой
+        if msg.startswith("\n"):
+            self.log.append(msg)
+            self.log.append(f"[{ts}] ")
+            return
+        self.log.append(f"[{ts}] {msg}")
+
+    # ---------- Профили ----------
+
+    def _refresh_profile_combo(self) -> None:
+        self.profile_combo.blockSignals(True)
+        self.profile_combo.clear()
+        for p in self.profiles:
+            self.profile_combo.addItem(p.name, p.slug)
+        # Выставляем текущий
+        for i, p in enumerate(self.profiles):
+            if p.slug == self.active_profile.slug:
+                self.profile_combo.setCurrentIndex(i)
+                break
+        self.profile_combo.blockSignals(False)
+
+    def _on_profile_changed(self, idx: int) -> None:
+        if idx < 0 or idx >= len(self.profiles):
+            return
+        self.active_profile = self.profiles[idx]
+        self.cfg.active_profile = self.active_profile.name
+        save_config(self.cfg)
+        self._log(f"Активный профиль: {self.active_profile.name}")
+
+    def _reload_profiles(self, prefer_slug: str | None = None) -> None:
+        self.profiles = list_profiles()
+        if prefer_slug:
+            for p in self.profiles:
+                if p.slug == prefer_slug:
+                    self.active_profile = p
+                    break
+            else:
+                self.active_profile = self.profiles[0]
+        else:
+            # Если активный исчез — берём первый
+            self.active_profile = next(
+                (p for p in self.profiles if p.slug == self.active_profile.slug),
+                self.profiles[0],
+            )
+        self.cfg.active_profile = self.active_profile.name
+        save_config(self.cfg)
+        self._refresh_profile_combo()
+
+    def _new_profile(self) -> None:
+        name, ok = QInputDialog.getText(
+            self, "Новый профиль", "Имя профиля:"
+        )
+        if not ok or not name.strip():
+            return
+        prof = Profile(name=name.strip())
+        prof.output_dir = f"./output/{prof.slug}"
+        save_profile(prof)
+        self._log(f"Создан профиль: {prof.name}")
+        self._reload_profiles(prefer_slug=prof.slug)
+        self._edit_profile()
+
+    def _edit_profile(self) -> None:
+        if not self.active_profile:
+            return
+        old_slug = self.active_profile.slug
+        dlg = ProfileEditDialog(self.active_profile, self)
+        if dlg.exec():
+            # Если имя сменилось — удалить старый файл
+            if self.active_profile.slug != old_slug:
+                old_path = Path.home() / ".ai_clip_gen" / "profiles" / f"{old_slug}.yaml"
+                if old_path.exists():
+                    try:
+                        old_path.unlink()
+                    except Exception:
+                        pass
+            self._log(f"Профиль сохранён: {self.active_profile.name}")
+            self._reload_profiles(prefer_slug=self.active_profile.slug)
+
+    def _duplicate_profile(self) -> None:
+        if not self.active_profile:
+            return
+        name, ok = QInputDialog.getText(
+            self, "Дубликат профиля",
+            f"Имя для копии «{self.active_profile.name}»:",
+            text=f"{self.active_profile.name} (копия)",
+        )
+        if not ok or not name.strip():
+            return
+        new = duplicate_profile(self.active_profile.name, name.strip())
+        if new:
+            self._log(f"Создан дубликат: {new.name}")
+            self._reload_profiles(prefer_slug=new.slug)
+
+    def _delete_profile(self) -> None:
+        if not self.active_profile:
+            return
+        if len(self.profiles) <= 1:
+            QMessageBox.information(
+                self, "Нельзя удалить",
+                "Это последний профиль — нужен хотя бы один."
+            )
+            return
+        ans = QMessageBox.question(
+            self, "Удалить профиль",
+            f"Удалить профиль «{self.active_profile.name}»? Файлы вывода не трогаются.",
+        )
+        if ans != QMessageBox.StandardButton.Yes:
+            return
+        delete_profile(self.active_profile.name)
+        self._log(f"Удалён профиль: {self.active_profile.name}")
+        self._reload_profiles()
+
+    def _load_from_profile_source(self) -> None:
+        src = (self.active_profile.source_dir or "").strip()
+        if not src:
+            QMessageBox.information(
+                self, "Папка не задана",
+                "В профиле не указана папка с исходными видео. "
+                "Открой «✎» и заполни поле «Папка с исходными видео»."
+            )
+            return
+        d = Path(src).expanduser()
+        if not d.is_dir():
+            QMessageBox.warning(
+                self, "Папка не найдена",
+                f"Папка не существует:\n{d}"
+            )
+            return
+        before = self.queue_list.count()
+        self._add_dir(d)
+        added = self.queue_list.count() - before
+        self._log(f"Загружено из «{self.active_profile.name}»: {added} видео из {d}")
 
     def _open_settings(self) -> None:
         dlg = SettingsDialog(self.cfg, self)
@@ -309,7 +510,10 @@ class MainWindow(QMainWindow):
             self._show_hardware_info()
 
     def _open_output_folder(self) -> None:
-        p = Path(self.cfg.paths.output_dir).expanduser().resolve()
+        # Сначала смотрим папку текущего профиля, fallback на глобальную
+        out = (self.active_profile.output_dir or self.cfg.paths.output_dir
+               if hasattr(self, "active_profile") else self.cfg.paths.output_dir)
+        p = Path(out).expanduser().resolve()
         p.mkdir(parents=True, exist_ok=True)
         QDesktopServices.openUrl(QUrl.fromLocalFile(str(p)))
 
@@ -347,7 +551,8 @@ class MainWindow(QMainWindow):
         self.stage_bar.setValue(0)
         self._log(f"Запуск batch: {len(jobs)} видео")
 
-        self.worker = PipelineWorker(jobs, self.cfg, self)
+        self._log(f"Профиль: {self.active_profile.name}  →  {self.active_profile.output_dir}")
+        self.worker = PipelineWorker(jobs, self.cfg, self.active_profile, self)
         self._jobs_total = len(jobs)
         self._jobs_done = 0
         self.worker.video_started.connect(self._on_video_started)

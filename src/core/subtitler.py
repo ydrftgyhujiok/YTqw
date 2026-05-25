@@ -57,7 +57,12 @@ def _build_word_by_word_events(
     segments: list[Segment], subs: SubtitlesConfig, clip_offset: float
 ) -> list[str]:
     """Для каждой фразы создаём по одной строке Dialogue на слово,
-    в которой текущее слово выделено стилем подсветки, остальные обычные."""
+    в которой текущее слово выделено стилем подсветки, остальные обычные.
+
+    Главное: события НЕ ДОЛЖНЫ перекрываться по времени, иначе на экране
+    будут видны две версии фразы одновременно. WhisperX иногда возвращает
+    word boundaries с микро-наложениями (w[i].end > w[i+1].start) — мы их
+    жёстко зажимаем."""
     events: list[str] = []
 
     # Собираем все слова из всех сегментов
@@ -83,24 +88,46 @@ def _build_word_by_word_events(
 
     phrases = _split_words_into_phrases(all_words, subs.max_chars_per_line)
 
-    for phrase in phrases:
-        for i, w in enumerate(phrase):
-            start = max(0.0, w.start - clip_offset)
-            end = max(start + 0.05, w.end - clip_offset)
-            # Собираем строку с выделением i-го слова
-            parts: list[str] = []
-            for j, ww in enumerate(phrase):
-                text = _apply_case(ww.text, subs.uppercase)
-                if j == i:
-                    # Выделение через override-стиль Hi: используем тег \c
-                    parts.append(f"{{\\c{_color_to_ass_override(subs.highlight_color)}\\b1}}{text}{{\\r}}")
-                else:
-                    parts.append(text)
-            line = " ".join(parts)
-            events.append(
-                f"Dialogue: 0,{format_timestamp(start, ass=True)},"
-                f"{format_timestamp(end, ass=True)},Default,,0,0,0,,{line}"
-            )
+    # Плоский список (phrase_idx, word_idx_in_phrase, word) для прохода по времени
+    flat: list[tuple[int, int, Word]] = []
+    for pi, phrase in enumerate(phrases):
+        for wi, w in enumerate(phrase):
+            flat.append((pi, wi, w))
+
+    # Считаем "следующую опорную точку" для каждой пары — это start следующего слова
+    # (в той же фразе или в следующей). Если ничего нет — оставляем w.end.
+    for i in range(len(flat)):
+        pi, wi, w = flat[i]
+        if i + 1 < len(flat):
+            next_w = flat[i + 1][2]
+            # Жёстко зажимаем конец к началу следующего слова —
+            # это и убирает overlap внутри фразы, и убирает overlap на границе фраз.
+            new_end = min(w.end, next_w.start)
+            # Гарантируем что end > start (хоть немного)
+            if new_end <= w.start:
+                new_end = w.start + 0.05
+            flat[i] = (pi, wi, Word(start=w.start, end=new_end, text=w.text))
+
+    # Для каждого слова рисуем фразу с выделением текущего
+    for pi, wi, w in flat:
+        phrase = phrases[pi]
+        start = max(0.0, w.start - clip_offset)
+        end = max(start + 0.05, w.end - clip_offset)
+        # Собираем строку с выделением wi-го слова
+        parts: list[str] = []
+        for j, ww in enumerate(phrase):
+            text = _apply_case(ww.text, subs.uppercase)
+            if j == wi:
+                parts.append(
+                    f"{{\\c{_color_to_ass_override(subs.highlight_color)}\\b1}}{text}{{\\r}}"
+                )
+            else:
+                parts.append(text)
+        line = " ".join(parts)
+        events.append(
+            f"Dialogue: 0,{format_timestamp(start, ass=True)},"
+            f"{format_timestamp(end, ass=True)},Default,,0,0,0,,{line}"
+        )
     return events
 
 
@@ -120,13 +147,29 @@ def _color_to_ass_override(color: str) -> str:
 def _build_phrase_events(
     segments: list[Segment], subs: SubtitlesConfig, clip_offset: float
 ) -> list[str]:
-    """Классические субтитры — целая фраза появляется и исчезает."""
+    """Классические субтитры — целая фраза появляется и исчезает.
+
+    Также защита от overlap: end текущего сегмента не должен заходить за start
+    следующего."""
+    if not segments:
+        return []
+
     events: list[str] = []
-    for seg in segments:
+    # Нормализованные интервалы (start, end) с обрезанием overlap
+    bounds: list[tuple[float, float]] = []
+    for i, seg in enumerate(segments):
+        s = seg.start
+        e = seg.end
+        if i + 1 < len(segments):
+            e = min(e, segments[i + 1].start)
+        if e <= s:
+            e = s + 0.05
+        bounds.append((s, e))
+
+    for (s, e), seg in zip(bounds, segments):
         text = _apply_case(seg.text.strip(), subs.uppercase)
         if not text:
             continue
-        # Разбиваем длинные сегменты по max_chars_per_line через \N
         words = text.split()
         lines: list[str] = []
         current = ""
@@ -140,8 +183,8 @@ def _build_phrase_events(
             lines.append(current)
         line = "\\N".join(lines)
 
-        start = max(0.0, seg.start - clip_offset)
-        end = max(start + 0.05, seg.end - clip_offset)
+        start = max(0.0, s - clip_offset)
+        end = max(start + 0.05, e - clip_offset)
         events.append(
             f"Dialogue: 0,{format_timestamp(start, ass=True)},"
             f"{format_timestamp(end, ass=True)},Default,,0,0,0,,{line}"
